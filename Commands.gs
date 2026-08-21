@@ -496,23 +496,88 @@ function bindMember_(arg, ev) {
 
 /* ========== 記住最近操作的卡片（給圖片附加用） ========== */
 
-function rememberCard_(ev, card) {
+/**
+ * 「目前這張卡」存在指令碼屬性，不是 CacheService。
+ *
+ * CacheService 是 best-effort 的，平台隨時可以把資料清掉，實測就遇過
+ * /show 之後緊接著傳圖卻查不到的情況。這是使用者流程的關鍵狀態，
+ * 不能建立在允許遺失的儲存上。屬性是永續的，過期由我們自己算。
+ */
+var LASTCARD_TTL = 1800;   // 秒；超過就當作沒指定
+
+function lastCardKey_(ev) {
   var uid = ev.source && ev.source.userId;
-  if (!uid || !card) return;
-  CacheService.getScriptCache().put('LASTCARD_' + uid,
-    JSON.stringify({
-      id: card.id, idShort: card.idShort, name: card.name, url: card.url,
-      at: Math.floor(new Date().getTime() / 1000)
-    }),
-    1800);   // 30 分鐘
+  return uid ? 'LASTCARD_' + uid : null;
+}
+
+function rememberCard_(ev, card) {
+  var key = lastCardKey_(ev);
+  if (!key || !card) return;
+  PropertiesService.getScriptProperties().setProperty(key, JSON.stringify({
+    id: card.id, idShort: card.idShort, name: card.name, url: card.url,
+    at: Math.floor(new Date().getTime() / 1000)
+  }));
+  trace_('[記住] 目前卡片 #' + card.idShort + '　' + key);
 }
 
 function lastCard_(ev) {
-  var uid = ev.source && ev.source.userId;
-  if (!uid) return null;
-  var raw = CacheService.getScriptCache().get('LASTCARD_' + uid);
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch (err) { return null; }
+  var key = lastCardKey_(ev);
+  if (!key) return null;
+
+  var P = PropertiesService.getScriptProperties();
+  var raw = P.getProperty(key);
+  if (!raw) {
+    trace_('[目前卡片] 沒有紀錄　' + key);
+    return null;
+  }
+
+  var card;
+  try {
+    card = JSON.parse(raw);
+  } catch (err) {
+    P.deleteProperty(key);
+    return null;
+  }
+
+  var age = Math.floor(new Date().getTime() / 1000) - (card.at || 0);
+  if (age > LASTCARD_TTL) {
+    trace_('[目前卡片] #' + card.idShort + ' 已過期（' + age + ' 秒）');
+    P.deleteProperty(key);
+    return null;
+  }
+
+  card.age = age;
+  return card;
+}
+
+/** 印出目前記住的卡片，直接看狀態，不必透過 LINE 來回試 */
+function showLastCard() {
+  var raw = PropertiesService.getScriptProperties().getProperty('LAST_EVENT');
+  if (!raw) { console.log('還沒有收到任何 LINE 事件。'); return; }
+
+  var uid;
+  try {
+    uid = JSON.parse(JSON.parse(raw).body).events[0].source.userId;
+  } catch (err) {
+    console.log('無法從 LAST_EVENT 取出 userId：' + err);
+    return;
+  }
+
+  var val = PropertiesService.getScriptProperties().getProperty('LASTCARD_' + uid);
+  if (!val) {
+    console.log('userId ' + uid + ' 目前沒有記住任何卡片。\n' +
+      '→ 先在 LINE 打 /show <編號> 或開一張單，再跑一次這個函式。');
+    return;
+  }
+
+  var c = JSON.parse(val);
+  var age = Math.floor(new Date().getTime() / 1000) - (c.at || 0);
+  console.log('userId: ' + uid +
+    '\n目前卡片: ' + c.idShort + '. ' + c.name +
+    '\n記錄於: ' + age + ' 秒前' +
+    (age > LASTCARD_TTL ? '　← 已超過 ' + LASTCARD_TTL + ' 秒，視為過期'
+                        : '　（私訊有效；群組限 ' + GROUP_IMAGE_WINDOW + ' 秒內）') +
+    '\n' + c.url);
 }
 
 /* ========== 圖片附加 ========== */
@@ -551,6 +616,7 @@ function attachImage_(ev) {
   // 沒有目標卡片就不收 —— 圖片一定要先有歸屬，
   // 否則「這張圖是哪件事的」只能靠猜。
   if (!card) {
+    trace_('[圖片] 私訊但查不到目前卡片');
     reply_(ev.replyToken,
       '還沒有指定卡片，這張圖沒有收。\n\n' +
       '先開單：#問題描述\n' +
@@ -558,6 +624,8 @@ function attachImage_(ev) {
       '指定後 30 分鐘內傳的圖都會附到那張卡。');
     return;
   }
+
+  trace_('[圖片] 目標 #' + card.idShort + '（' + (card.age || 0) + ' 秒前指定）');
 
   var r = attachToCard_(ev.message.id, card);
   reply_(ev.replyToken, r.ok
