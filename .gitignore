@@ -1,0 +1,10 @@
+# 本機暫存
+*.tmp
+.curlrc*
+__pycache__/
+*.pyc
+
+# 絕不要進版控：任何含金鑰的檔案
+.env
+token.json
+*.secret
