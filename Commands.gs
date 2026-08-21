@@ -134,6 +134,7 @@ function helpText_() {
     '【討論】',
     '  /note ' + N + ' 內容   在卡片留言',
     '  直接傳圖片         附到你最近操作的那張卡',
+    '                   （群組限 5 分鐘內，私訊 30 分鐘內）',
     '',
     '【問 AI】',
     '  /ask 問題          自由對話，會記得前幾輪',
@@ -489,7 +490,10 @@ function rememberCard_(ev, card) {
   var uid = ev.source && ev.source.userId;
   if (!uid || !card) return;
   CacheService.getScriptCache().put('LASTCARD_' + uid,
-    JSON.stringify({ id: card.id, idShort: card.idShort, name: card.name, url: card.url }),
+    JSON.stringify({
+      id: card.id, idShort: card.idShort, name: card.name, url: card.url,
+      at: Math.floor(new Date().getTime() / 1000)
+    }),
     1800);   // 30 分鐘
 }
 
@@ -508,8 +512,31 @@ function lastCard_(ev) {
  *
  * LINE 的圖片內容要打 api-data.line.me（不是 api.line.me），這點很容易寫錯。
  */
+/**
+ * 群組裡的圖片只在「剛剛才操作過卡片」的短時間內收。
+ *
+ * 私訊視窗 30 分鐘沒問題 —— 那個對話框本來就只拿來開單。
+ * 但群組是大家聊天的地方，隨手傳的照片跟卡片無關的機率高得多，
+ * 窗口拉長只會把無關的圖片灌進卡片裡。
+ */
+var GROUP_IMAGE_WINDOW = 300;   // 秒
+
 function attachImage_(ev) {
+  var isDirect = (ev.source && ev.source.type === 'user');
   var card = lastCard_(ev);
+
+  if (!isDirect) {
+    // 群組：沒有近期操作過卡片就當作與 bot 無關，安靜略過，不要回話洗版
+    if (!card) {
+      trace_('[圖片] 群組圖片但這個人沒有進行中的卡片，略過');
+      return;
+    }
+    var age = Math.floor(new Date().getTime() / 1000) - (card.at || 0);
+    if (age > GROUP_IMAGE_WINDOW) {
+      trace_('[圖片] 群組圖片但距離上次操作已 ' + age + ' 秒，超過視窗，略過');
+      return;
+    }
+  }
 
   // 沒有目標卡片就不收 —— 圖片一定要先有歸屬，
   // 否則「這張圖是哪件事的」只能靠猜。

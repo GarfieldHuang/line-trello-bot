@@ -18,7 +18,7 @@ function prop_(key) {
 /* ========== Webhook 進入點 ========== */
 
 /** 版本標記：改程式後把這個數字加一，就能從執行紀錄看出部署的是不是新版 */
-var CODE_VERSION = 'v18';
+var CODE_VERSION = 'v19';
 
 /**
  * 私訊開單的前綴。半形 # 與全形 ＃ 都接受 —— 中文輸入法下打出來的常是全形，
@@ -184,11 +184,11 @@ function handleEvent_(ev) {
     cache.put(k, '1', 600);
   }
 
-  // 圖片：附到這個人最近操作的那張卡（30 分鐘內有效）。
-  // 只在私訊處理 —— 群組裡大家傳的圖多半跟卡片無關，全附上去會很吵。
+  // 圖片：附到「這個人」最近操作的那張卡。
+  // 私訊 30 分鐘內有效；群組只收 5 分鐘內，且不符合時安靜略過 ——
+  // 群組裡跟卡片無關的照片很多，回話會洗版。
   if (ev.message.type === 'image') {
-    if (ev.source && ev.source.type === 'user') attachImage_(ev);
-    else trace_('[退出] 群組圖片，忽略');
+    attachImage_(ev);
     return;
   }
 
