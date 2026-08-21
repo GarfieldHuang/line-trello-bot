@@ -36,21 +36,15 @@ LINE 群組  --@機器人-->  LINE Messaging API
 
 ## 一、Trello 準備
 
-看板已經建好（透過 Trello connector 建立）：
+1. 建立看板，可見性設為 **Private**
+2. 清單建成四欄，**順序與名稱要一致**：
 
-- **問題追蹤｜地端 LLM 專案** — <https://trello.com/b/bfou7zRV/>
-  - 可見性：**Private**
-  - 清單：待確認 / 處理中 / 等回覆 / 已解決
-  - 「待確認」清單 id：`6a87b8827726aceeaa0fbdc3`（填進 `TRELLO_LIST_ID`）
-  - 已放一張「使用規則」卡，團隊看完可封存
+   ```
+   待確認 → 處理中 → 等回覆 → 已解決
+   ```
 
-另有一個 **地端 LLM 系統｜證交好夥伴** 規劃板，用途不同（提案與架構規劃），
-兩個板子不要混用。
-
-剩下要做的：
-
-1. 用 Email 或連結邀請 7 位成員（各自用 Google 登入）
-2. 取得 API 金鑰
+3. 邀請成員（右上「分享」→ 建立連結，貼給大家；人到齊後把連結停用）
+4. 取得 API 金鑰
    - 前往 <https://trello.com/power-ups/admin>
    - 建立一個 Power-Up（名稱隨意，例如 `line-bot`），建立後即可看到 **API Key**
    - 在同一頁點「Token」產生使用者 token，或自行開啟：
@@ -61,9 +55,10 @@ LINE 群組  --@機器人-->  LINE Messaging API
 
    - 授權後畫面顯示的字串就是 **Token**
 
-> Token 等同於你的 Trello 帳號權限，不要外流、不要進版控。
+5. 四個清單的 id 之後用 `setupListBoardLists` 查（見下一節）
 
----
+> **API Key 是公開的，Token 不是。** Token 等同你的 Trello 帳號完整讀寫權限，
+> 不要外流、不要寫進程式碼、不要進版控。
 
 ## 二、建立 Apps Script 專案
 
@@ -76,12 +71,12 @@ LINE 群組  --@機器人-->  LINE Messaging API
 |---|---|
 | `TRELLO_KEY` | 上一步的 API Key |
 | `TRELLO_TOKEN` | 上一步的 Token |
-| `TRELLO_BOARD_URL` | `https://trello.com/b/bfou7zRV/問題追蹤地端-llm-專案` |
-| `TRELLO_LIST_ID` | `6a87b8827726aceeaa0fbdc3`（「待確認」清單，已建好） |
+| `TRELLO_BOARD_URL` | 你的看板網址，例如 `https://trello.com/b/aBcD1234/my-board` |
+| `TRELLO_LIST_ID` | 「待確認」清單的 id，用 `setupListBoardLists` 查 |
 | `LINE_CHANNEL_ACCESS_TOKEN` | 第三節取得 |
 | `HOOK_SECRET` | 執行 `setupGenerateHookSecret` 產生 |
 
-5. `TRELLO_LIST_ID` 已經在上表給你了。若之後改了看板結構，可執行 `setupListBoardLists` 重新查
+5. 執行 `setupListBoardLists`，把印出來的四個清單 id 填進對應屬性
 6. 執行 `testCreateCard` 確認 Trello 端沒問題（會開一張測試卡，測完自己刪掉）
 
 ---
@@ -197,12 +192,14 @@ LINE 群組  --@機器人-->  LINE Messaging API
 
 指令層要移動卡片，所以四個清單都要設：
 
-| 屬性 | 清單 | 值 |
-|---|---|---|
-| `TRELLO_LIST_ID` | 待確認 | `6a87b8827726aceeaa0fbdc3` |
-| `TRELLO_LIST_DOING` | 處理中 | `6a87b883198c633864ca4f62` |
-| `TRELLO_LIST_WAITING` | 等回覆 | `6a87b8859670ed825e3ec064` |
-| `TRELLO_LIST_DONE` | 已解決 | `6a87b8873aefca569853675b` |
+| 屬性 | 對應清單 |
+|---|---|
+| `TRELLO_LIST_ID` | 待確認 |
+| `TRELLO_LIST_DOING` | 處理中 |
+| `TRELLO_LIST_WAITING` | 等回覆 |
+| `TRELLO_LIST_DONE` | 已解決 |
+
+四個值都用 `setupListBoardLists` 查，它會把看板上每個清單的名稱與 id 一起印出來。
 
 ## 公司網路
 

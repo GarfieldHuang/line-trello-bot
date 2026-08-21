@@ -8,3 +8,6 @@ __pycache__/
 .env
 token.json
 *.secret
+
+# 本機專用的實際設定值
+*.local.md
