@@ -306,7 +306,13 @@ function splitCardArg_(arg) {
   return m ? { query: m[1], rest: (m[2] || '').trim() } : { query: '', rest: '' };
 }
 
-/** 找卡片，找不到／有歧義時直接回覆使用者並回傳 null */
+/**
+ * 找卡片，找不到／有歧義時直接回覆使用者並回傳 null。
+ *
+ * 找到就順手記成「目前這張卡」。使用者打出卡號的當下就已經表達了對象，
+ * 即使那道指令因為缺參數而中斷（例如只打了 /note 9），
+ * 接著傳的圖片也該附到這張 —— 不記的話會變成「明明指名了卻沒反應」。
+ */
 function resolveCard_(query, ev) {
   if (!query) {
     reply_(ev.replyToken, '要指定哪一張卡片。\n\n' + renderOpenCards_());
@@ -322,6 +328,7 @@ function resolveCard_(query, ev) {
       res.candidates.map(function (c) { return '  ' + c.idShort + '. ' + c.name; }).join('\n'));
     return null;
   }
+  rememberCard_(ev, res.card);
   return res.card;
 }
 
@@ -369,7 +376,10 @@ function addNote_(arg, ev) {
   if (!card) return;
 
   if (!parts.rest) {
-    reply_(ev.replyToken, '要留言的內容是什麼？例如：\n/note ' + card.idShort + ' 已經跟廠商確認過了');
+    // 卡片已經在 resolveCard_ 裡記住了，順便告訴使用者圖片也能直接傳
+    reply_(ev.replyToken,
+      '要留言的內容是什麼？例如：\n/note ' + card.idShort + ' 已經跟廠商確認過了\n\n' +
+      '如果是要附圖片，直接傳圖就好 —— 現在的目標是 ' + card.idShort + '. ' + card.name);
     return;
   }
 
