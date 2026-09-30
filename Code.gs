@@ -18,7 +18,7 @@ function prop_(key) {
 /* ========== Webhook 進入點 ========== */
 
 /** 版本標記：改程式後把這個數字加一，就能從執行紀錄看出部署的是不是新版 */
-var CODE_VERSION = 'v22';
+var CODE_VERSION = 'v23';
 
 /**
  * 私訊開單的前綴。半形 # 與全形 ＃ 都接受 —— 中文輸入法下打出來的常是全形，
@@ -193,6 +193,20 @@ function handleEvent_(ev) {
     var k = 'ev_' + ev.webhookEventId;
     if (cache.get(k)) return;
     cache.put(k, '1', 600);
+  }
+
+  // 存檔：去重之後、任何「退出」判斷之前，群組裡每則訊息都會留一份。
+  // 寫入「LINE 對話紀錄（原始）」試算表的 archiveEvent_ 放在獨立的 .gs 檔。
+  // 用 typeof 檢查而不是直接呼叫：那個檔案不在時要明講，而不是只丟一個 ReferenceError。
+  // 失敗只記 trace，不影響後面的開單流程。
+  if (typeof archiveEvent_ === 'function') {
+    try {
+      archiveEvent_(ev);
+    } catch (err) {
+      trace_('[存檔失敗] ' + err);
+    }
+  } else {
+    trace_('[存檔] 找不到 archiveEvent_，對話沒有寫進試算表（寫入程式的 .gs 檔不見了？）');
   }
 
   // 圖片：附到「這個人」最近操作的那張卡。
