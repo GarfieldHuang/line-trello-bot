@@ -332,7 +332,9 @@ function handleCommand_(input, ev) {
       return;
 
     case 'ask': case '問':
-      llmChat_(arg, ev);
+      // 有 WebSearch.gs 就用會上網查的版本，沒有就退回 Llm.gs 的一般版
+      if (typeof llmChatWeb_ === 'function') llmChatWeb_(arg, ev);
+      else llmChat_(arg, ev);
       return;
 
     case 'summary': case 'sum': case '摘要':
@@ -394,7 +396,7 @@ function helpText_() {
     '                   （群組限 5 分鐘內，私訊 30 分鐘內）',
     '',
     '【問 AI】',
-    '  /ask 問題          自由對話，會記得前幾輪',
+    '  /ask 問題          自由對話，會記得前幾輪；需要時會上網查並附來源',
     '  /ask clear        清掉對話記憶',
     '  /summary          摘要這個群組今天的對話',
     '  /summary 3        摘要最近 3 天（私訊要先 /use 選專案）',

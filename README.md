@@ -218,6 +218,7 @@ GAS 跑在 Google 的伺服器上，呼叫 Trello API 不經過公司 proxy，**
 | `Llm.gs` | 選用的 LLM 層：自然語言判讀與 `/ask` |
 | `Archive.gs` | 每則訊息寫進「LINE 對話紀錄（原始）」試算表，每小時匯出 Markdown 到 Drive |
 | `Summary.gs` | `/summary`：從存檔試算表讀出同一群組的對話，交給 LLM 摘要 |
+| `WebSearch.gs` | `/ask` 的網路搜尋版：需要時上網查並附來源（缺這個檔時 `/ask` 退回不查網路的版本） |
 
 > **更新線上程式時只貼有改動的檔案。** 整份覆蓋前先確認線上版本跟這裡一致，
 > 曾經發生過線上多了 repo 沒有的程式、被覆蓋掉的事。
