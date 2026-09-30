@@ -18,7 +18,7 @@ function prop_(key) {
 /* ========== Webhook 進入點 ========== */
 
 /** 版本標記：改程式後把這個數字加一，就能從執行紀錄看出部署的是不是新版 */
-var CODE_VERSION = 'v21';
+var CODE_VERSION = 'v22';
 
 /**
  * 私訊開單的前綴。半形 # 與全形 ＃ 都接受 —— 中文輸入法下打出來的常是全形，
@@ -166,8 +166,19 @@ function handleEvent_(ev) {
 
   // 加好友、或被邀請進群組時，主動把使用說明送出去。
   // 使用者第一次接觸 bot 的時機就是最該告訴他怎麼用的時機。
-  if (ev.type === 'follow' || ev.type === 'join') {
+  if (ev.type === 'follow') {
     reply_(ev.replyToken, '我是問題追蹤小幫手。\n\n' + helpText_());
+    return;
+  }
+
+  // 被拉進新群組：先提醒綁定看板，否則這個群組的卡片會開到預設看板上
+  if (ev.type === 'join') {
+    reply_(ev.replyToken,
+      '我是問題追蹤小幫手。\n\n' +
+      '這個群組還沒綁定看板，目前會用預設看板。\n' +
+      '要讓這個群組用自己的看板，請管理員執行：\n' +
+      '@@@/setup https://trello.com/b/看板網址\n\n' +
+      '用法說明：@@@/help');
     return;
   }
 
@@ -396,13 +407,20 @@ function senderName_(ev) {
 
 /* ========== Trello ========== */
 
+/** 目前專案的「待確認」清單 id。群組綁了看板就用那個，否則用預設看板。 */
+function todoListOrThrow_() {
+  var id = lists_().todo;
+  if (!id) throw new Error('目前專案沒有設定「待確認」清單（預設看板要設 TRELLO_LIST_ID，群組要先 /setup）');
+  return id;
+}
+
 function createCard_(name, desc) {
   var res = UrlFetchApp.fetch('https://api.trello.com/1/cards', {
     method: 'post',
     payload: {
       key: prop_('TRELLO_KEY'),
       token: prop_('TRELLO_TOKEN'),
-      idList: prop_('TRELLO_LIST_ID'),
+      idList: todoListOrThrow_(),
       name: name,
       desc: desc,
       pos: 'top'

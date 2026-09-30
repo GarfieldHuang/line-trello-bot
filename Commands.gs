@@ -12,16 +12,257 @@
  *   - 標題關鍵字（子字串比對，不分大小寫；命中多張會列出來讓你選）
  */
 
-/* ========== 清單設定 ========== */
+/* ========== 專案（群組 → 看板）路由 ========== */
 
-function lists_() {
+/**
+ * 一個 bot 服務多個專案：每個 LINE 群組可以綁定自己的 Trello 看板。
+ *
+ *   群組   → GROUP_<groupId> 屬性裡記的看板；沒綁定就用預設看板
+ *   私訊   → USE_<userId> 指到的群組專案（用 /use 切換）；沒設定就用預設看板
+ *   預設   → 原本的 TRELLO_LIST_* 四個屬性
+ *
+ * 預設看板保留原本的屬性，所以既有群組什麼都不用做就能繼續運作。
+ */
+var STATUS_NAMES = { todo: '待確認', doing: '處理中', waiting: '等回覆', done: '已解決' };
+
+function defaultProject_() {
   var P = PropertiesService.getScriptProperties();
   return {
-    todo:    P.getProperty('TRELLO_LIST_ID'),        // 待確認
-    doing:   P.getProperty('TRELLO_LIST_DOING'),     // 處理中
-    waiting: P.getProperty('TRELLO_LIST_WAITING'),   // 等回覆
-    done:    P.getProperty('TRELLO_LIST_DONE')       // 已解決
+    key: 'default',
+    name: P.getProperty('DEFAULT_PROJECT_NAME') || '預設專案',
+    isDefault: true,
+    lists: {
+      todo:    P.getProperty('TRELLO_LIST_ID'),
+      doing:   P.getProperty('TRELLO_LIST_DOING'),
+      waiting: P.getProperty('TRELLO_LIST_WAITING'),
+      done:    P.getProperty('TRELLO_LIST_DONE')
+    }
   };
+}
+
+function loadProject_(key) {
+  if (!key || key === 'default') return null;
+  var raw = PropertiesService.getScriptProperties().getProperty('GROUP_' + key);
+  if (!raw) return null;
+  try {
+    var p = JSON.parse(raw);
+    p.key = key;
+    return p;
+  } catch (err) {
+    return null;
+  }
+}
+
+/** 這則訊息屬於哪個專案 */
+function projectOf_(ev) {
+  var src = (ev && ev.source) || {};
+  var gid = src.groupId || src.roomId;
+
+  if (gid) return loadProject_(gid) || defaultProject_();
+
+  if (src.userId) {
+    var use = PropertiesService.getScriptProperties().getProperty('USE_' + src.userId);
+    var p = loadProject_(use);
+    if (p) return p;
+  }
+  return defaultProject_();
+}
+
+/** 目前事件所屬專案的四個清單 id。在編輯器手動執行時（沒有事件）回傳預設看板。 */
+function lists_() {
+  return projectOf_(CURRENT_EV).lists;
+}
+
+/** 所有已綁定的群組專案 */
+function allProjects_() {
+  var props = PropertiesService.getScriptProperties().getProperties();
+  var out = [];
+  Object.keys(props).forEach(function (k) {
+    if (k.indexOf('GROUP_') !== 0) return;
+    try {
+      var p = JSON.parse(props[k]);
+      p.key = k.slice(6);
+      out.push(p);
+    } catch (err) { /* 壞掉的紀錄略過 */ }
+  });
+  out.sort(function (a, b) { return (a.boundAt || 0) - (b.boundAt || 0); });
+  return out;
+}
+
+/* ========== /setup：把群組綁到看板 ========== */
+
+/**
+ * 只有 SETUP_ADMINS 裡的人能綁定。
+ *
+ * bot 用的是你的 Trello token，它看得到你帳號底下所有看板。
+ * 如果任何群組成員都能 /setup，知道網址的人就能把群組綁到你其他的私人看板，
+ * 再用 /list 把內容讀出來。所以預設關閉，要明確授權。
+ */
+function isSetupAdmin_(ev) {
+  var uid = ev.source && ev.source.userId;
+  var raw = PropertiesService.getScriptProperties().getProperty('SETUP_ADMINS') || '';
+  return !!uid && raw.split(/[\s,]+/).indexOf(uid) !== -1;
+}
+
+function setupGroup_(arg, ev) {
+  var src = ev.source || {};
+  var gid = src.groupId || src.roomId;
+
+  if (!gid) {
+    reply_(ev.replyToken,
+      '/setup 要在群組裡執行，把「那個群組」綁到看板。\n' +
+      '私訊要切換專案請用 /use。');
+    return;
+  }
+
+  if (!isSetupAdmin_(ev)) {
+    reply_(ev.replyToken,
+      '你沒有 /setup 的權限。\n\n' +
+      '管理員請到 Apps Script 的指令碼屬性，在 SETUP_ADMINS 加入這個 userId：\n' +
+      (src.userId || '(取不到)') + '\n\n多個人用逗號分隔。');
+    return;
+  }
+
+  var m = (arg || '').match(/trello\.com\/b\/([A-Za-z0-9]+)/);
+  if (!m) {
+    reply_(ev.replyToken, '請附上看板網址，例如：\n/setup https://trello.com/b/aBcD1234/my-board');
+    return;
+  }
+
+  var board;
+  try {
+    board = trelloGet_('/boards/' + m[1], { fields: 'id,name,shortUrl' });
+  } catch (err) {
+    reply_(ev.replyToken, '讀不到這個看板。確認網址正確，而且看板在 bot 所用的 Trello 帳號底下。');
+    return;
+  }
+
+  // 依名稱對應四個清單，缺的就建起來 —— 新看板直接 /setup 就能用
+  var existing = trelloGet_('/boards/' + board.id + '/lists', { fields: 'id,name', filter: 'open' });
+  var lists = {};
+  var created = [];
+
+  ['todo', 'doing', 'waiting', 'done'].forEach(function (key) {
+    var want = STATUS_NAMES[key];
+    var hit = existing.filter(function (l) { return l.name.trim() === want; })[0];
+    if (hit) {
+      lists[key] = hit.id;
+    } else {
+      var l = trelloPost_('/lists', { name: want, idBoard: board.id, pos: 'bottom' });
+      lists[key] = l.id;
+      created.push(want);
+    }
+  });
+
+  var groupName = lineGroupName_(src) || board.name;
+  PropertiesService.getScriptProperties().setProperty('GROUP_' + gid, JSON.stringify({
+    name: board.name,
+    groupName: groupName,
+    url: board.shortUrl,
+    lists: lists,
+    boundAt: Math.floor(new Date().getTime() / 1000)
+  }));
+
+  trace_('[setup] ' + gid + ' → ' + board.name);
+
+  reply_(ev.replyToken, [
+    '已綁定：這個群組 → ' + board.name,
+    board.shortUrl,
+    '',
+    created.length
+      ? '看板原本缺少的清單已自動建立：' + created.join('、')
+      : '四個清單都已存在，直接對應。',
+    '',
+    '之後這個群組的開單、/list、/done 都只會動這個看板。'
+  ].join('\n'));
+}
+
+/** LINE 群組名稱，拿不到就回 null（多人聊天室沒有名稱） */
+function lineGroupName_(src) {
+  if (!src.groupId) return null;
+  try {
+    var res = UrlFetchApp.fetch(
+      'https://api.line.me/v2/bot/group/' + src.groupId + '/summary',
+      { headers: { Authorization: 'Bearer ' + prop_('LINE_CHANNEL_ACCESS_TOKEN') },
+        muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return null;
+    return JSON.parse(res.getContentText()).groupName || null;
+  } catch (err) {
+    return null;
+  }
+}
+
+/* ========== /use：私訊切換專案 ========== */
+
+function useProject_(arg, ev) {
+  var src = ev.source || {};
+
+  if (src.groupId || src.roomId) {
+    reply_(ev.replyToken, '群組的專案是固定的（由 /setup 決定），/use 只在私訊有用。\n' +
+      '目前這個群組：' + projectOf_(ev).name);
+    return;
+  }
+
+  var projects = allProjects_();
+  var q = (arg || '').trim();
+
+  if (!q) {
+    var cur = projectOf_(ev);
+    var lines = ['目前私訊的專案：' + cur.name, '', '可切換的專案：', '  0. ' + defaultProject_().name + '（預設）'];
+    projects.forEach(function (p, i) {
+      lines.push('  ' + (i + 1) + '. ' + p.name + (p.groupName && p.groupName !== p.name ? '（' + p.groupName + '）' : ''));
+    });
+    lines.push('', '用 /use 編號 或 /use 名稱 切換');
+    reply_(ev.replyToken, lines.join('\n'));
+    return;
+  }
+
+  var P = PropertiesService.getScriptProperties();
+
+  if (q === '0' || /^(default|預設)$/i.test(q)) {
+    P.deleteProperty('USE_' + src.userId);
+    reply_(ev.replyToken, '已切換到：' + defaultProject_().name);
+    return;
+  }
+
+  var target = null;
+  if (/^\d+$/.test(q)) {
+    target = projects[parseInt(q, 10) - 1] || null;
+  } else {
+    var ql = q.toLowerCase();
+    var hits = projects.filter(function (p) {
+      return (p.name || '').toLowerCase().indexOf(ql) !== -1 ||
+             (p.groupName || '').toLowerCase().indexOf(ql) !== -1;
+    });
+    if (hits.length > 1) {
+      reply_(ev.replyToken, '「' + q + '」符合多個專案，請改用編號：\n' +
+        hits.map(function (p) { return '  ' + (projects.indexOf(p) + 1) + '. ' + p.name; }).join('\n'));
+      return;
+    }
+    target = hits[0] || null;
+  }
+
+  if (!target) {
+    reply_(ev.replyToken, '找不到「' + q + '」這個專案。打 /use 看清單。');
+    return;
+  }
+
+  P.setProperty('USE_' + src.userId, target.key);
+  reply_(ev.replyToken, '已切換到：' + target.name + '\n之後私訊的開單與指令都會用這個看板。\n' + (target.url || ''));
+}
+
+/** /where：目前這則訊息會用哪個看板 */
+function whereAmI_(ev) {
+  var p = projectOf_(ev);
+  var src = ev.source || {};
+  var inGroup = !!(src.groupId || src.roomId);
+  var hint = '';
+  if (p.isDefault) {
+    hint = inGroup
+      ? '\n\n這個群組還沒 /setup，用的是預設看板。'
+      : '\n\n私訊目前用預設看板，/use 可以切換。';
+  }
+  reply_(ev.replyToken, '目前專案：' + p.name + (p.url ? '\n' + p.url : '') + hint);
 }
 
 /* ========== 指令分派 ========== */
@@ -38,7 +279,7 @@ function handleCommand_(input, ev) {
   switch (cmd) {
     case 'list': case 'ls': case '單':
       reply_(ev.replyToken, /^(all|全部|含已解決)$/i.test(arg)
-        ? renderCards_(allCards_(), ['待確認', '處理中', '等回覆', '已解決'])
+        ? projectHeader_() + renderCards_(allCards_(), ['待確認', '處理中', '等回覆', '已解決'])
         : renderOpenCards_());
       return;
 
@@ -72,6 +313,18 @@ function handleCommand_(input, ev) {
 
     case 'due': case '期限':
       setDue_(arg, ev);
+      return;
+
+    case 'setup':
+      setupGroup_(arg, ev);
+      return;
+
+    case 'use': case '專案':
+      useProject_(arg, ev);
+      return;
+
+    case 'where': case 'project':
+      whereAmI_(ev);
       return;
 
     case 'bind': case '綁定':
@@ -140,6 +393,11 @@ function helpText_() {
     '  /ask 問題          自由對話，會記得前幾輪',
     '  /ask clear        清掉對話記憶',
     '',
+    '【專案】一個 bot 可以同時服務多個群組',
+    '  /where            目前用的是哪個看板',
+    '  /use              私訊切換專案（先打 /use 看清單）',
+    '  /setup 看板網址     把這個群組綁到看板（限管理員）',
+    '',
     '【其他】',
     '  /rename ' + N + ' 新標題',
     '  /due ' + N + ' 8/25   設期限（clear 可清除）',
@@ -200,11 +458,20 @@ function renderCards_(cards, order) {
   return out.join('\n');
 }
 
+/**
+ * 清單開頭標出專案名稱 —— 只在綁定了群組專案之後才顯示。
+ * 只有一個看板時標出來只是雜訊；有多個時不標，就分不清眼前是哪一邊的卡。
+ */
+function projectHeader_() {
+  if (!allProjects_().length) return '';
+  return '專案：' + projectOf_(CURRENT_EV).name + '\n\n';
+}
+
 function renderOpenCards_() {
   var cards = openCards_();
-  if (!cards.length) return '目前沒有未結案的卡片。\n（/list all 可以看含已解決的全部）';
+  if (!cards.length) return projectHeader_() + '目前沒有未結案的卡片。\n（/list all 可以看含已解決的全部）';
 
-  return renderCards_(cards, ['待確認', '處理中', '等回覆']) +
+  return projectHeader_() + renderCards_(cards, ['待確認', '處理中', '等回覆']) +
     '\n\n/done <編號> 結案　/list all 看全部';
 }
 
