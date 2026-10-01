@@ -400,6 +400,8 @@ function helpText_() {
     '  /ask clear        清掉對話記憶',
     '  /summary          摘要這個群組今天的對話',
     '  /summary 3        摘要最近 3 天（私訊要先 /use 選專案）',
+    '  /summary 3 指示    讀最近 3 天的對話，照你的指示處理',
+    '                   例：/summary 3 列出所有待辦和負責人',
     '',
     '【專案】一個 bot 可以同時服務多個群組',
     '  /where            目前用的是哪個看板',

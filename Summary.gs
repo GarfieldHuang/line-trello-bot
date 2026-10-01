@@ -4,9 +4,12 @@
  * 資料來源是 Archive.gs 寫的「LINE 對話紀錄（原始）」試算表（log 分頁），
  * 用「對話ID」欄篩出同一個群組的訊息，再交給 LLM 摘要。
  *
- *   群組裡 @@@/summary     摘要這個群組今天的對話
- *   群組裡 @@@/summary 3   摘要這個群組最近 3 天
- *   私訊   /summary        摘要 /use 選的專案所綁定的群組（限該群組成員）
+ *   群組裡 @@@/summary               摘要這個群組今天的對話（預設格式）
+ *   群組裡 @@@/summary 3             摘要最近 3 天
+ *   群組裡 @@@/summary 3 列出待辦     讀最近 3 天的對話，照後面的指示處理
+ *   私訊   /summary [天數] [指示]     對象是 /use 選的專案所綁定的群組（限該群組成員）
+ *
+ * 第一個詞是純數字才當天數，其餘都是指示 —— 「/summary 5個重點」整串都是指示。
  *
  * 需要 LLM 層（OPENAI_REFRESH_TOKEN）與存檔（ARCHIVE_SHEET_ID）都已設定。
  * bot 自己的回覆不會被存檔，所以摘要只涵蓋成員的發言。
@@ -31,11 +34,13 @@ function summaryCmd_(arg, ev) {
     return;
   }
 
-  var days = parseSummaryDays_(arg);
-  if (days === null) {
-    reply_(ev.replyToken, '天數要是 1 到 ' + SUMMARY_MAX_DAYS + ' 的數字，例如：\n/summary　　今天\n/summary 3　最近 3 天');
+  var parsed = parseSummaryArgs_(arg);
+  if (parsed.error) {
+    reply_(ev.replyToken, parsed.error);
     return;
   }
+  var days = parsed.days;
+  var prompt = parsed.prompt;   // 空字串代表用預設摘要格式
 
   var target = summaryTarget_(ev);
   if (target.error) {
@@ -62,7 +67,38 @@ function summaryCmd_(arg, ev) {
     truncated = true;
   }
 
-  var instructions = [
+  var instructions = prompt
+    ? customSummaryInstructions_(prompt, truncated)
+    : defaultSummaryInstructions_(truncated);
+
+  trace_('[summary] ' + (prompt ? '自訂指示：' + prompt.slice(0, 60) : '預設格式'));
+
+  var answer;
+  try {
+    answer = llmAsk_(instructions, transcript);
+  } catch (err) {
+    trace_('[summary] LLM 失敗: ' + err);
+    reply_(ev.replyToken, '摘要的時候出錯了。\n' + String(err).slice(0, 200));
+    return;
+  }
+
+  answer = (answer || '').trim();
+  if (!answer) {
+    reply_(ev.replyToken, '沒有拿到摘要結果，再試一次看看。');
+    return;
+  }
+
+  // 群組裡其他人也看得到這則回覆，把指示一起標出來，才知道這份結果是照什麼要求產生的
+  var header = '【摘要】' + name + '・' + rangeLabel + '（' + data.lines.length + ' 則）' +
+    (prompt ? '\n指示：' + (prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt) : '');
+  var text = header + '\n\n' + answer;
+  if (text.length > 4800) text = text.slice(0, 4800) + '\n…（後面省略）';
+  reply_(ev.replyToken, text);
+}
+
+/** 預設摘要格式：重點討論／決議／待辦／未解問題 */
+function defaultSummaryInstructions_(truncated) {
+  return [
     '你要幫一個工作群組摘要 LINE 對話。以下每一行是「時間 發言人：內容」。',
     '',
     '輸出格式（LINE 不支援 Markdown，不要用 **、#、表格；條列用「- 」開頭）：',
@@ -85,35 +121,55 @@ function summaryCmd_(arg, ev) {
     '- 標有「（開單）」的是有人透過 bot 建立了追蹤卡片的問題',
     truncated ? '- 對話太長，較早的部分已省略，摘要開頭要註明只涵蓋後段' : ''
   ].join('\n');
-
-  var answer;
-  try {
-    answer = llmAsk_(instructions, transcript);
-  } catch (err) {
-    trace_('[summary] LLM 失敗: ' + err);
-    reply_(ev.replyToken, '摘要的時候出錯了。\n' + String(err).slice(0, 200));
-    return;
-  }
-
-  answer = (answer || '').trim();
-  if (!answer) {
-    reply_(ev.replyToken, '沒有拿到摘要結果，再試一次看看。');
-    return;
-  }
-
-  var header = '【摘要】' + name + '・' + rangeLabel + '（' + data.lines.length + ' 則）';
-  var text = header + '\n\n' + answer;
-  if (text.length > 4800) text = text.slice(0, 4800) + '\n…（後面省略）';
-  reply_(ev.replyToken, text);
 }
 
-/** 空白 → 1（今天）；1..MAX 的數字 → 該天數；其他 → null */
-function parseSummaryDays_(arg) {
+/**
+ * 使用者自訂指示。
+ *
+ * 指示取代預設的四段格式，但「只根據對話內容」與 LINE 不支援 Markdown 這兩條保留 ——
+ * 前者是摘要可信度的底線，後者不留的話回覆會滿是星號和井字號。
+ */
+function customSummaryInstructions_(prompt, truncated) {
+  return [
+    '你要根據一個工作群組的 LINE 對話紀錄完成使用者的要求。對話紀錄每一行是「時間 發言人：內容」。',
+    '',
+    '使用者的要求：',
+    prompt,
+    '',
+    '規則：',
+    '- 用繁體中文、台灣用語回答，除非使用者指定其他語言',
+    '- LINE 不支援 Markdown，不要用 **、#、表格；條列用「- 」開頭',
+    '- 只根據對話紀錄回答；紀錄裡找不到的資訊就說找不到，不要推測或編造',
+    '- 除非使用者要求詳細，否則控制在 800 字內',
+    '- 標有「（開單）」的是有人透過 bot 建立了追蹤卡片的問題',
+    truncated ? '- 對話太長，較早的部分已省略，回答開頭要註明只涵蓋後段' : ''
+  ].join('\n');
+}
+
+/**
+ * 解析 /summary 後面的參數 → { days, prompt } 或 { error }。
+ *
+ * 第一個詞是純數字（後面接空白或結尾）才當天數；「今天／today」也算。
+ * 其他一律當指示，所以「/summary 5個重點」整串都是指示，不會被拆成 5 天。
+ */
+function parseSummaryArgs_(arg) {
   var s = (arg || '').trim();
-  if (!s || /^(today|今天)$/i.test(s)) return 1;
-  if (!/^\d+$/.test(s)) return null;
-  var n = parseInt(s, 10);
-  return (n >= 1 && n <= SUMMARY_MAX_DAYS) ? n : null;
+  var days = 1;
+
+  var m = s.match(/^(\d+)(?:\s+([\s\S]*))?$/);
+  if (m) {
+    days = parseInt(m[1], 10);
+    s = (m[2] || '').trim();
+    if (days < 1 || days > SUMMARY_MAX_DAYS) {
+      return { error: '天數要在 1 到 ' + SUMMARY_MAX_DAYS + ' 之間，例如：\n' +
+        '/summary 3\n/summary 3 列出所有待辦和負責人' };
+    }
+  } else {
+    var t = s.match(/^(today|今天)(?:\s+([\s\S]*))?$/i);
+    if (t) s = (t[2] || '').trim();
+  }
+
+  return { days: days, prompt: s };
 }
 
 /**
