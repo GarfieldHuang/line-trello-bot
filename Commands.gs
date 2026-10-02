@@ -341,6 +341,10 @@ function handleCommand_(input, ev) {
       summaryCmd_(arg, ev);
       return;
 
+    case 'stats': case 'stat': case '統計':
+      statsCmd_(arg, ev);
+      return;
+
     case 'help': case '?': case '說明':
       reply_(ev.replyToken, helpText_());
       return;
@@ -380,6 +384,7 @@ function helpText_() {
     '【看】',
     '  /list             未結案清單',
     '  /list all         含已解決的全部',
+    '  /stats            最近 7 天每天新增、解決幾張（/stats 30 看 30 天）',
     '  /show ' + N + '   看內容與留言',
     '',
     '【改狀態】四個狀態可以互相切換',
