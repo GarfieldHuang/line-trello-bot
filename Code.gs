@@ -18,7 +18,7 @@ function prop_(key) {
 /* ========== Webhook 進入點 ========== */
 
 /** 版本標記：改程式後把這個數字加一，就能從執行紀錄看出部署的是不是新版 */
-var CODE_VERSION = 'v27';
+var CODE_VERSION = 'v28';
 
 /**
  * 私訊開單的前綴。半形 # 與全形 ＃ 都接受 —— 中文輸入法下打出來的常是全形，
@@ -138,6 +138,14 @@ function doPost(e) {
       handleEvent_(events[i]);
     } catch (err) {
       trace_('[例外] ' + err + (err && err.stack ? '\n' + err.stack : ''));
+      // 使用者明確叫了 bot 卻出錯，一定要回話；否則只會看到「沒反應」，分不出是壞了還是沒收到。
+      // 群組裡跟 bot 無關的訊息出錯則保持安靜，避免洗版。
+      if (ADDRESSED && CURRENT_EV && CURRENT_EV.replyToken) {
+        try {
+          reply_(CURRENT_EV.replyToken, '處理的時候出錯了：\n' + String(err).slice(0, 200) +
+            '\n\n（管理員可以在 Apps Script 執行 showLastTrace 看詳情）');
+        } catch (e2) { /* 連回覆都失敗就只能留在 trace 裡 */ }
+      }
     }
   }
   saveTrace_();
@@ -157,8 +165,12 @@ function ok_() {
  */
 var CURRENT_EV = null;
 
+/** 這則訊息是不是明確在叫 bot（指令或開單）。出錯時只對這種訊息回錯誤。 */
+var ADDRESSED = false;
+
 function handleEvent_(ev) {
   CURRENT_EV = ev;
+  ADDRESSED = false;
 
   trace_('[事件] type=' + ev.type +
     '　source=' + (ev.source ? ev.source.type : '?') +
@@ -248,8 +260,13 @@ function handleEvent_(ev) {
 
   if (!payload) return;
 
+  // 走到這裡就確定是在對 bot 說話（私訊一律算；群組已確認有 @@@ 或 @bot）。
+  // 之後任何一步出錯都要回話，所以旗標在這裡就設，不要等到開單或指令分派才設。
+  ADDRESSED = true;
+
   // ── 指令層 ──
   if (payload.charAt(0) === '/') {
+    ADDRESSED = true;
     handleCommand_(payload, ev);
     return;
   }
@@ -296,6 +313,7 @@ function handleEvent_(ev) {
     '提出時間: ' + when + (isDirect ? ' (LINE 私訊)' : ' (LINE 群組)')
   ].join('\n');
 
+  ADDRESSED = true;
   trace_('[開單] ' + title);
   var card = createCard_(title, desc);
   trace_('[成功] ' + card.shortUrl);
