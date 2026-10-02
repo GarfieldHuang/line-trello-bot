@@ -398,7 +398,7 @@ function helpText_() {
     '【討論】',
     '  /note ' + N + ' 內容   在卡片留言',
     '  直接傳圖片         附到你最近操作的那張卡',
-    '                   （群組限 5 分鐘內，私訊 30 分鐘內）',
+    '                   （群組限 1 分鐘內，私訊 30 分鐘內）',
     '',
     '【問 AI】',
     '  /ask 問題          自由對話，會記得前幾輪；需要時會上網查並附來源',
@@ -876,7 +876,7 @@ function showLastCard() {
  * 但群組是大家聊天的地方，隨手傳的照片跟卡片無關的機率高得多，
  * 窗口拉長只會把無關的圖片灌進卡片裡。
  */
-var GROUP_IMAGE_WINDOW = 300;   // 秒
+var GROUP_IMAGE_WINDOW = 60;    // 秒；指定卡片後 1 分鐘內傳的圖才收
 
 function attachImage_(ev) {
   var isDirect = (ev.source && ev.source.type === 'user');
