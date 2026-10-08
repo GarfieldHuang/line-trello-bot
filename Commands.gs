@@ -397,7 +397,7 @@ function helpText_() {
     '',
     '【討論】',
     '  /note ' + N + ' 內容   在卡片留言',
-    '  直接傳圖片         附到你最近操作的那張卡',
+    '  直接傳圖片或檔案    附到你最近操作的那張卡（檔案上限 10 MB）',
     '                   （群組限 1 分鐘內，私訊 30 分鐘內）',
     '',
     '【問 AI】',
@@ -862,88 +862,105 @@ function showLastCard() {
     '\n' + c.url);
 }
 
-/* ========== 圖片附加 ========== */
+/* ========== 圖片與檔案附加 ========== */
 
 /**
- * 把 LINE 的圖片訊息附到使用者最近操作的那張卡片。
+ * 把 LINE 的圖片或檔案訊息附到使用者最近操作的那張卡片，兩者規則完全相同。
  *
- * LINE 的圖片內容要打 api-data.line.me（不是 api.line.me），這點很容易寫錯。
- */
-/**
- * 群組裡的圖片只在「剛剛才操作過卡片」的短時間內收。
+ * 群組裡只在「剛剛才操作過卡片」的短時間內收。私訊視窗 30 分鐘沒問題 ——
+ * 那個對話框本來就只拿來開單；但群組是大家聊天的地方，隨手傳的照片、檔案
+ * 跟卡片無關的機率高得多，窗口拉長只會把無關的東西灌進卡片裡。
  *
- * 私訊視窗 30 分鐘沒問題 —— 那個對話框本來就只拿來開單。
- * 但群組是大家聊天的地方，隨手傳的照片跟卡片無關的機率高得多，
- * 窗口拉長只會把無關的圖片灌進卡片裡。
+ * 內容要打 api-data.line.me（不是 api.line.me），這點很容易寫錯。
  */
-var GROUP_IMAGE_WINDOW = 60;    // 秒；指定卡片後 1 分鐘內傳的圖才收
+var GROUP_IMAGE_WINDOW = 60;    // 秒；指定卡片後 1 分鐘內傳的圖片／檔案才收
 
+/** Trello 免費版單一附件上限 10MB。超過就不下載，直接請使用者自己上傳。 */
+var ATTACH_MAX_BYTES = 10 * 1024 * 1024;
+
+/** 名稱沿用 attachImage_（Code.gs 依這個名字呼叫），圖片與檔案都走這裡 */
 function attachImage_(ev) {
+  var m = ev.message;
+  var isFile = m.type === 'file';
+  var what = isFile ? '檔案' : '圖片';
   var isDirect = (ev.source && ev.source.type === 'user');
   var card = lastCard_(ev);
 
   if (!isDirect) {
     // 群組：沒有近期操作過卡片就當作與 bot 無關，安靜略過，不要回話洗版
     if (!card) {
-      trace_('[圖片] 群組圖片但這個人沒有進行中的卡片，略過');
+      trace_('[附件] 群組' + what + '但這個人沒有進行中的卡片，略過');
       return;
     }
     var age = Math.floor(new Date().getTime() / 1000) - (card.at || 0);
     if (age > GROUP_IMAGE_WINDOW) {
-      trace_('[圖片] 群組圖片但距離上次操作已 ' + age + ' 秒，超過視窗，略過');
+      trace_('[附件] 群組' + what + '但距離上次操作已 ' + age + ' 秒，超過視窗，略過');
       return;
     }
   }
 
-  // 沒有目標卡片就不收 —— 圖片一定要先有歸屬，
-  // 否則「這張圖是哪件事的」只能靠猜。
+  // 沒有目標卡片就不收 —— 附件一定要先有歸屬，
+  // 否則「這個東西是哪件事的」只能靠猜。
   if (!card) {
-    trace_('[圖片] 私訊但查不到目前卡片');
+    trace_('[附件] 私訊但查不到目前卡片');
     reply_(ev.replyToken,
-      '還沒有指定卡片，這張圖沒有收。\n\n' +
+      '還沒有指定卡片，這個' + what + '沒有收。\n\n' +
       '先開單：#問題描述\n' +
       '或指定一張現有的：/show 編號\n' +
-      '指定後 30 分鐘內傳的圖都會附到那張卡。');
+      '指定後 30 分鐘內傳的圖片或檔案都會附到那張卡。');
     return;
   }
 
-  trace_('[圖片] 目標 #' + card.idShort + '（' + (card.age || 0) + ' 秒前指定）');
+  if (isFile && m.fileSize && m.fileSize > ATTACH_MAX_BYTES) {
+    trace_('[附件] 檔案過大 ' + m.fileSize + ' bytes：' + m.fileName);
+    reply_(ev.replyToken,
+      '「' + m.fileName + '」有 ' + (m.fileSize / 1048576).toFixed(1) + ' MB，' +
+      '超過 Trello 免費版單檔 10 MB 的上限，請直接到卡片上傳。\n' + card.url);
+    return;
+  }
 
-  var r = attachToCard_(ev.message.id, card);
+  trace_('[附件] ' + what + (isFile ? '「' + m.fileName + '」' : '') +
+    ' → #' + card.idShort + '（' + (card.age || 0) + ' 秒前指定）');
+
+  var r = attachToCard_(m.id, card, isFile ? m.fileName : null);
   reply_(ev.replyToken, r.ok
-    ? '圖片已附到 ' + card.idShort + '. ' + card.name + '\n' + card.url
+    ? what + (isFile ? '「' + m.fileName + '」' : '') + '已附到 ' +
+      card.idShort + '. ' + card.name + '\n' + card.url
     : r.msg + '\n' + card.url);
 }
 
-/** 下載 LINE 圖片並上傳成 Trello 附件。回傳 {ok:true} 或 {ok:false, msg} */
-function attachToCard_(messageId, card) {
-  // 圖片內容要打 api-data.line.me，不是 api.line.me
+/**
+ * 下載 LINE 的訊息內容並上傳成 Trello 附件。回傳 {ok:true} 或 {ok:false, msg}
+ * fileName 有給就用原檔名；圖片沒有檔名，用時間戳記命名。
+ */
+function attachToCard_(messageId, card, fileName) {
   var res = UrlFetchApp.fetch(
     'https://api-data.line.me/v2/bot/message/' + messageId + '/content',
     { headers: { Authorization: 'Bearer ' + prop_('LINE_CHANNEL_ACCESS_TOKEN') },
       muteHttpExceptions: true });
 
   if (res.getResponseCode() !== 200) {
-    trace_('[圖片] 下載失敗 ' + res.getResponseCode());
-    return { ok: false, msg: '圖片抓不下來，請直接到 Trello 卡片貼上。' };
+    trace_('[附件] 下載失敗 ' + res.getResponseCode());
+    return { ok: false, msg: '從 LINE 抓不下來（可能已過期），請直接到 Trello 卡片上傳。' };
   }
 
   var stamp = Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd-HHmmss');
-  var blob = res.getBlob().setName('line-' + stamp + '.jpg');
+  var name = fileName || ('line-' + stamp + '.jpg');
+  var blob = res.getBlob().setName(name);
   var auth = trelloAuth_();
 
   var up = UrlFetchApp.fetch('https://api.trello.com/1/cards/' + card.id + '/attachments', {
     method: 'post',
-    payload: { key: auth.key, token: auth.token, file: blob },
+    payload: { key: auth.key, token: auth.token, file: blob, name: name },
     muteHttpExceptions: true
   });
 
   if (up.getResponseCode() >= 300) {
-    trace_('[圖片] 上傳失敗 ' + up.getResponseCode() + ': ' + up.getContentText());
-    return { ok: false, msg: '上傳到 Trello 失敗，請直接到卡片貼上。' };
+    trace_('[附件] 上傳失敗 ' + up.getResponseCode() + ': ' + up.getContentText());
+    return { ok: false, msg: '上傳到 Trello 失敗，請直接到卡片上傳。' };
   }
 
-  trace_('[圖片] 已附到 #' + card.idShort);
+  trace_('[附件] 已附到 #' + card.idShort + '：' + name);
   return { ok: true };
 }
 

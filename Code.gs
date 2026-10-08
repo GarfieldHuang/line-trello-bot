@@ -18,7 +18,7 @@ function prop_(key) {
 /* ========== Webhook 進入點 ========== */
 
 /** 版本標記：改程式後把這個數字加一，就能從執行紀錄看出部署的是不是新版 */
-var CODE_VERSION = 'v29';
+var CODE_VERSION = 'v30';
 
 /**
  * 私訊開單的前綴。半形 # 與全形 ＃ 都接受 —— 中文輸入法下打出來的常是全形，
@@ -221,10 +221,10 @@ function handleEvent_(ev) {
     trace_('[存檔] 找不到 archiveEvent_，對話沒有寫進試算表（寫入程式的 .gs 檔不見了？）');
   }
 
-  // 圖片：附到「這個人」最近操作的那張卡。
+  // 圖片與檔案：附到「這個人」最近操作的那張卡。
   // 私訊 30 分鐘內有效；群組只收 1 分鐘內，且不符合時安靜略過 ——
   // 群組裡跟卡片無關的照片很多，回話會洗版。
-  if (ev.message.type === 'image') {
+  if (ev.message.type === 'image' || ev.message.type === 'file') {
     attachImage_(ev);
     return;
   }
